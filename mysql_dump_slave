@@ -1,0 +1,51 @@
+#!/bin/bash
+
+# Set current datetime
+START=$(date +%s)
+TIMESTAMP=`date +"%y%m%d"`
+DB_serv=$1
+DB_bk_dir="/data/backup/$1"
+DB_name="$(mysqlshow -h$DB_serv | sed -r 's/[\|+-]+//g' | sed '/^$/d' | sed '1d')"
+DB_dir="/root/dbbackup/$TIMESTAMP/$DB_name"
+
+# Flush and Lock
+echo "DB_name $DB_name"
+echo "----------------"
+echo "Stop slave"
+mysql -h$DB_serv -e 'STOP SLAVE SQL_THREAD;'
+mysql -h$DB_serv -e 'SHOW MASTER STATUS > $DB_bk_dir/$TIMESTAMP/master-position;'
+echo "----------------"
+
+echo "Start mysqldump"
+echo "----------------"
+
+for i in $(mysqlshow  -h$DB_serv | sed -r 's/[\|+-]+//g' | sed '/^$/d' | sed '1d')
+do
+        if [[ "$i" != "sys" ]]
+        then
+                #echo "db name - $i"
+                #echo "table in $i:"
+                #DB_table="$(mysql -NBA -u$DB_user -p$DB_pass -h$DB_serv -D $i -e 'show tables')"
+                #echo "$DB_table"
+                tbl_count=0
+                for t in $(mysql -NBA -h$DB_serv -D $i -e 'show tables')
+                do
+                        echo "table: $DB_bk_dir/$TIMESTAMP/$i/$t"
+                        mkdir -p  $DB_bk_dir/$TIMESTAMP/$i
+                        mysqldump -h$DB_serv $i $t --dump-slave | pv -W |pigz  > $DB_bk_dir/$TIMESTAMP/$i/$t.sql.gz
+                        tbl_count=$(( tbl_count + 1 ))
+                done
+                echo "$tbl_count tables dumped from database '$i' into dir=$DB_bk_dir/$TIMESTAMP/$i/"
+        fi
+done
+
+echo "----------------"
+
+# Unlock
+echo "Start slave"
+$mysql -h$DB_serv -e 'START SLAVE'
+echo "----------------"
+
+END=$(date +%s)
+DIFF=$(( $END - $START ))
+echo "It took $DIFF seconds"
